@@ -1,0 +1,164 @@
+{
+  "entities": {
+    "Church": {
+      "title": "Church",
+      "description": "Independent church tenant entity",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "denomination": { "type": "string", "maxLength": 50 },
+        "cnpj": { "type": "string", "maxLength": 20 },
+        "pastorName": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string", "maxLength": 20 },
+        "address": { "type": "string", "maxLength": 200 },
+        "city": { "type": "string", "maxLength": 50 },
+        "state": { "type": "string", "maxLength": 2 },
+        "zipCode": { "type": "string", "maxLength": 10 },
+        "logoUrl": { "type": "string" },
+        "primaryColor": { "type": "string", "maxLength": 10 },
+        "secondaryColor": { "type": "string", "maxLength": 10 },
+        "exclusiveCode": { "type": "string", "maxLength": 10 },
+        "status": { "type": "string", "enum": ["PENDING", "ACTIVE", "SUSPENDED", "CLOSED"] },
+        "plan": { "type": "string", "enum": ["FREE", "MONTHLY_50", "ANNUAL_600"] },
+        "planStatus": { "type": "string", "enum": ["ACTIVE", "TRIAL", "SUSPENDED"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "exclusiveCode", "status"]
+    },
+    "User": {
+      "title": "User",
+      "description": "System user with role and church tenancy",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "churchId": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["ADMIN", "PASTOR", "SECRETARY", "TREASURER", "MEMBER"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE"] },
+        "lastLogin": { "type": "string" }
+      },
+      "required": ["id", "churchId", "name", "email", "role"]
+    },
+    "Member": {
+      "title": "Member",
+      "description": "Church member record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "churchId": { "type": "string" },
+        "fullName": { "type": "string", "maxLength": 150 },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "birthDate": { "type": "string" },
+        "gender": { "type": "string", "enum": ["MALE", "FEMALE"] },
+        "maritalStatus": { "type": "string", "enum": ["SINGLE", "MARRIED", "WIDOWED", "DIVORCED"] },
+        "membershipDate": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "DISVISITED", "TRANSFERRED"] },
+        "address": { "type": "object" },
+        "departmentIds": { "type": "array" }
+      },
+      "required": ["id", "churchId", "fullName", "status"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Auditoria de atividades críticas de segurança e alterações",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "churchId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "action": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "date": { "type": "string" }
+      },
+      "required": ["id", "churchId", "userId", "action", "details"]
+    },
+    "Backup": {
+      "title": "Backup",
+      "description": "Registro de backup de dados da igreja",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "churchId": { "type": "string" },
+        "churchName": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "checksum": { "type": "string" },
+        "dataJson": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "churchId", "createdAt", "checksum", "dataJson"]
+    },
+    "PaymentProof": {
+      "title": "PaymentProof",
+      "description": "Comprovante de pagamento manual de assinatura de igreja",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "churchId": { "type": "string" },
+        "churchName": { "type": "string" },
+        "plan": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
+        "submittedAt": { "type": "string" },
+        "submittedBy": { "type": "string" }
+      },
+      "required": ["id", "churchId", "plan", "amount", "status", "submittedAt"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Chamado de suporte técnico da central de ajuda",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "churchId": { "type": "string" },
+        "churchName": { "type": "string" },
+        "subject": { "type": "string" },
+        "category": { "type": "string" },
+        "priority": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "churchId", "subject", "category", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/churches/{churchId}": {
+      "schema": "Church",
+      "description": "Independent church tenants"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "System users tied to churches"
+    },
+    "/churches/{churchId}/members/{memberId}": {
+      "schema": "Member",
+      "description": "Church members isolated by churchId"
+    },
+    "/auditLogs/{auditId}": {
+      "schema": "AuditLog",
+      "description": "Logs de auditoria imutáveis"
+    },
+    "/backups/{backupId}": {
+      "schema": "Backup",
+      "description": "Backups da igreja"
+    },
+    "/paymentProofs/{proofId}": {
+      "schema": "PaymentProof",
+      "description": "Comprovantes de pagamento de assinaturas"
+    },
+    "/tickets/{ticketId}": {
+      "schema": "SupportTicket",
+      "description": "Chamados de suporte técnico"
+    }
+  }
+}

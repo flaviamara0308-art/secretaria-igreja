@@ -1,0 +1,625 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // GLOBAL SAFETY NET: DEFAULT DENY ALL
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // GLOBAL HELPER PRIMITIVES (No DB reads)
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isStrLen(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isOptStr(data, key, maxLen) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    // =========================================================================
+    // RELATIONAL IDENTITY & RBAC HELPERS
+    // =========================================================================
+    function userDocPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function hasUserDoc() {
+      return isSignedIn() && exists(userDocPath());
+    }
+
+    function userData() {
+      return get(userDocPath()).data;
+    }
+
+    function isActiveUser() {
+      return hasUserDoc() && userData().status == 'ACTIVE';
+    }
+
+    function userChurchId() {
+      return userData().churchId;
+    }
+
+    function userRole() {
+      return userData().role;
+    }
+
+    function isSameChurch(churchId) {
+      return isActiveUser() && userChurchId() == churchId && userChurchId() != 'PLATFORM';
+    }
+
+    function hasVerifiedEmailOrGoogle() {
+      return ('email_verified' in request.auth.token && request.auth.token.email_verified == true)
+        || (
+          'firebase' in request.auth.token
+          && 'sign_in_provider' in request.auth.token.firebase
+          && request.auth.token.firebase.sign_in_provider == 'google.com'
+        );
+    }
+
+    function tokenMatchesEmail(targetEmail) {
+      return targetEmail is string && (
+        ('email' in request.auth.token && request.auth.token.email == targetEmail)
+        || (
+          'firebase' in request.auth.token
+          && 'identities' in request.auth.token.firebase
+          && 'email' in request.auth.token.firebase.identities
+          && request.auth.token.firebase.identities.email is list
+          && targetEmail in request.auth.token.firebase.identities.email
+        )
+      );
+    }
+
+    function hasAdminEmailToken() {
+      return tokenMatchesEmail('flaviamara0308@gmail.com')
+        || tokenMatchesEmail('aplicativosflavia27@gmail.com');
+    }
+
+    function isBootstrappedPlatformAdmin() {
+      return isSignedIn()
+        && hasAdminEmailToken()
+        && hasVerifiedEmailOrGoogle();
+    }
+
+    function isPlatformStaff() {
+      return isBootstrappedPlatformAdmin()
+        || (isActiveUser()
+            && userChurchId() == 'PLATFORM'
+            && (userRole() == 'PLATFORM_ADMIN' || userRole() == 'PLATFORM_ASSISTANT_ADMIN'));
+    }
+
+    function isPlatformRootAdmin() {
+      return isBootstrappedPlatformAdmin()
+        || (isActiveUser() && userChurchId() == 'PLATFORM' && userRole() == 'PLATFORM_ADMIN');
+    }
+
+    function hasPlatformPermission(perm) {
+      return isBootstrappedPlatformAdmin()
+        || (isPlatformStaff() && (
+          userRole() == 'PLATFORM_ADMIN'
+          || ('platformPermissions' in userData()
+              && userData().platformPermissions is list
+              && perm in userData().platformPermissions)
+        ));
+    }
+
+    function isChurchSecretary(churchId) {
+      return isSameChurch(churchId)
+        && (userRole() == 'GENERAL_SECRETARY' || userRole() == 'ADMIN' || userRole() == 'SECRETARY');
+    }
+
+    function canManageSettingsAndBackups(churchId) {
+      return isSameChurch(churchId)
+        && (userRole() == 'GENERAL_SECRETARY' || userRole() == 'ADMIN' || userRole() == 'SECRETARY');
+    }
+
+    function isChurchStaffEditor(churchId) {
+      return isChurchSecretary(churchId)
+        || (isSameChurch(churchId) && userRole() == 'ASSISTANT_SECRETARY');
+    }
+
+    function isChurchPastor(churchId) {
+      return isSameChurch(churchId) && userRole() == 'PASTOR';
+    }
+
+    function isDepartmentLeader(churchId) {
+      return isSameChurch(churchId) && userRole() == 'DEPARTMENT_LEADER';
+    }
+
+    function leaderSharesDepartment(memberData) {
+      return 'departmentIds' in userData()
+        && userData().departmentIds is list
+        && 'departmentIds' in memberData
+        && memberData.departmentIds is list
+        && memberData.departmentIds.hasAny(userData().departmentIds);
+    }
+
+    // =========================================================================
+    // SCHEMA VALIDATORS
+    // =========================================================================
+    function isValidChurch(data) {
+      return data.keys().hasAll(['id', 'name', 'email', 'exclusiveCode', 'status'])
+        && isValidId(data.id)
+        && isStrLen(data.name, 2, 120)
+        && isStrLen(data.email, 5, 120)
+        && isStrLen(data.exclusiveCode, 2, 20)
+        && data.status in ['PENDING', 'ACTIVE', 'SUSPENDED', 'CLOSED']
+        && (!('plan' in data) || data.plan in ['FREE_PERMANENT', 'MONTHLY_50', 'ANNUAL_600', 'FREE'])
+        && (!('planStatus' in data) || data.planStatus in ['ACTIVE', 'TRIAL', 'IN_GRACE_PERIOD', 'SUSPENDED_OVERDUE', 'SUSPENDED']);
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'churchId', 'name', 'email', 'role', 'status'])
+        && isValidId(data.id)
+        && isStrLen(data.churchId, 2, 128)
+        && isStrLen(data.name, 2, 120)
+        && isStrLen(data.email, 5, 120)
+        && data.role in [
+          'GENERAL_SECRETARY', 'ASSISTANT_SECRETARY', 'PASTOR', 'DEPARTMENT_LEADER',
+          'PLATFORM_ADMIN', 'PLATFORM_ASSISTANT_ADMIN', 'ADMIN', 'SECRETARY', 'TREASURER', 'MEMBER'
+        ]
+        && data.status in ['ACTIVE', 'INACTIVE', 'PENDING_INVITE'];
+    }
+
+    function isValidMember(data) {
+      return data.keys().hasAll(['id', 'churchId', 'fullName', 'status'])
+        && isValidId(data.id)
+        && isValidId(data.churchId)
+        && isStrLen(data.fullName, 2, 150)
+        && data.status in ['ACTIVE', 'INACTIVE']
+        && isOptStr(data, 'memberCode', 40)
+        && isOptStr(data, 'email', 120)
+        && isOptStr(data, 'phone', 40);
+    }
+
+    function isValidDepartment(data) {
+      return data.keys().hasAll(['id', 'churchId', 'name', 'status'])
+        && isValidId(data.id)
+        && isValidId(data.churchId)
+        && isStrLen(data.name, 2, 100)
+        && data.status in ['ACTIVE', 'INACTIVE'];
+    }
+
+    function isValidEvent(data) {
+      return data.keys().hasAll(['id', 'churchId', 'title', 'startDate', 'category'])
+        && isValidId(data.id)
+        && isValidId(data.churchId)
+        && isStrLen(data.title, 2, 150)
+        && data.category in ['CULT', 'REUNION', 'BAPTISM', 'SPECIAL', 'DEPARTMENT', 'ADMIN'];
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['id', 'churchId', 'userId', 'userName', 'action', 'details', 'timestamp'])
+        && isValidId(data.id)
+        && isStrLen(data.churchId, 2, 128)
+        && isValidId(data.userId)
+        && isStrLen(data.userName, 1, 120)
+        && isStrLen(data.action, 2, 160)
+        && isStrLen(data.details, 1, 2000)
+        && data.timestamp is number;
+    }
+
+    function isValidBackup(data) {
+      return data.keys().hasAll(['id', 'churchId', 'createdAt', 'checksum', 'dataJson'])
+        && isValidId(data.id)
+        && isValidId(data.churchId)
+        && isStrLen(data.checksum, 4, 64)
+        && data.dataJson is string;
+    }
+
+    function isValidPaymentProof(data) {
+      return data.keys().hasAll(['id', 'churchId', 'plan', 'amount', 'paymentMethod', 'status', 'submittedAt'])
+        && isValidId(data.id)
+        && isValidId(data.churchId)
+        && data.plan in ['MONTHLY_50', 'ANNUAL_600']
+        && data.amount is number
+        && data.amount > 0
+        && data.paymentMethod in ['PIX', 'TRANSFER', 'OTHER']
+        && data.status in ['PENDING', 'APPROVED', 'REJECTED'];
+    }
+
+    function isValidTicket(data) {
+      return data.keys().hasAll(['id', 'churchId', 'subject', 'category', 'priority', 'status', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.churchId)
+        && isStrLen(data.subject, 2, 180)
+        && data.category in ['DUVIDA', 'TECNICO', 'FINANCEIRO', 'SUGESTAO', 'OUTRO']
+        && data.priority in ['BAIXA', 'MEDIA', 'ALTA', 'URGENTE']
+        && data.status in ['OPEN', 'IN_PROGRESS', 'WAITING_RESPONSE', 'RESOLVED', 'CANCELLED'];
+    }
+
+    // =========================================================================
+    // CHURCHES COLLECTION (Multi-Tenant Isolation + Commercial Separation)
+    // =========================================================================
+    match /churches/{churchId} {
+      allow get: if isValidId(churchId) && (
+        (isSignedIn() && (
+          ('ownerUid' in resource.data && resource.data.ownerUid == request.auth.uid)
+          || ('email' in resource.data && tokenMatchesEmail(resource.data.email))
+        ))
+        || isSameChurch(churchId)
+        || hasPlatformPermission('MANAGE_CHURCHES')
+        || hasPlatformPermission('SUBSCRIPTIONS')
+        || hasPlatformPermission('MANAGE_FINANCES')
+        || hasPlatformPermission('CLOSE_CHURCHES')
+      );
+
+      allow list: if (isActiveUser() && resource.data.id == userChurchId())
+        || (isSignedIn() && (
+          ('ownerUid' in resource.data && resource.data.ownerUid == request.auth.uid)
+          || ('email' in resource.data && tokenMatchesEmail(resource.data.email))
+        ))
+        || hasPlatformPermission('MANAGE_CHURCHES')
+        || hasPlatformPermission('SUBSCRIPTIONS')
+        || hasPlatformPermission('MANAGE_FINANCES')
+        || hasPlatformPermission('CLOSE_CHURCHES');
+
+      // Church registration creates PENDING status; Platform admins can register active directly
+      allow create: if isSignedIn() && isValidId(churchId) && isValidChurch(incoming()) && incoming().id == churchId && (
+        (
+          incoming().status == 'PENDING'
+          && (!('plan' in incoming()) || incoming().plan != 'FREE_PERMANENT')
+          && (!('ownerUid' in incoming()) || incoming().ownerUid == request.auth.uid)
+        )
+        || hasPlatformPermission('MANAGE_CHURCHES')
+      );
+
+      // Church Secretary can update ONLY institutional branding/contact/offlineConfig of OWN church;
+      // Only Platform Admins with appropriate permissions can change plan, planStatus, or status!
+      allow update: if isValidId(churchId) && isValidChurch(incoming()) && incoming().id == existing().id && (
+        (
+          isChurchSecretary(churchId)
+          && incoming().exclusiveCode == existing().exclusiveCode
+          && incoming().plan == existing().plan
+          && incoming().planStatus == existing().planStatus
+          && incoming().status == existing().status
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'denomination', 'cnpj', 'pastorName', 'email', 'phone',
+            'address', 'city', 'state', 'zipCode', 'logoUrl',
+            'primaryColor', 'secondaryColor', 'offlineConfig', 'updatedAt'
+          ])
+        )
+        || hasPlatformPermission('MANAGE_CHURCHES')
+        || hasPlatformPermission('SUBSCRIPTIONS')
+        || hasPlatformPermission('MANAGE_FINANCES')
+        || hasPlatformPermission('CLOSE_CHURCHES')
+      );
+
+      allow delete: if isValidId(churchId) && hasPlatformPermission('CLOSE_CHURCHES');
+
+      // -----------------------------------------------------------------------
+      // MEMBERS SUB-COLLECTION (STRICTLY ISOLATED FROM OTHER CHURCHES & PLATFORM)
+      // Platform Admins & Support CANNOT read or write church member records!
+      // -----------------------------------------------------------------------
+      match /members/{memberId} {
+        allow get: if isValidId(churchId) && isValidId(memberId) && (
+          isChurchStaffEditor(churchId)
+          || isChurchPastor(churchId)
+          || (isDepartmentLeader(churchId) && leaderSharesDepartment(existing()))
+        );
+
+        allow list: if isValidId(churchId) && (
+          isChurchStaffEditor(churchId)
+          || isChurchPastor(churchId)
+          || (isDepartmentLeader(churchId)
+              && 'departmentIds' in resource.data
+              && resource.data.departmentIds is list
+              && 'departmentIds' in userData()
+              && userData().departmentIds is list
+              && resource.data.departmentIds.hasAny(userData().departmentIds))
+        );
+
+        allow create: if isValidId(churchId) && isValidId(memberId)
+          && isValidMember(incoming())
+          && incoming().id == memberId
+          && incoming().churchId == churchId
+          && isChurchStaffEditor(churchId);
+
+        allow update: if isValidId(churchId) && isValidId(memberId)
+          && isValidMember(incoming())
+          && incoming().id == existing().id
+          && incoming().churchId == existing().churchId
+          && incoming().churchId == churchId
+          && isChurchStaffEditor(churchId);
+
+        allow delete: if isValidId(churchId) && isValidId(memberId) && isChurchSecretary(churchId);
+      }
+
+      // -----------------------------------------------------------------------
+      // DEPARTMENTS SUB-COLLECTION (Isolated by churchId; Leaders read assigned)
+      // -----------------------------------------------------------------------
+      match /departments/{deptId} {
+        allow get: if isValidId(churchId) && isValidId(deptId) && (
+          isChurchStaffEditor(churchId)
+          || isChurchPastor(churchId)
+          || (isDepartmentLeader(churchId)
+              && 'departmentIds' in userData()
+              && userData().departmentIds is list
+              && deptId in userData().departmentIds)
+        );
+
+        allow list: if isValidId(churchId) && (
+          isChurchStaffEditor(churchId)
+          || isChurchPastor(churchId)
+          || isPlatformRootAdmin()
+          || (isDepartmentLeader(churchId)
+              && 'departmentIds' in userData()
+              && userData().departmentIds is list
+              && resource.data.id in userData().departmentIds)
+        );
+
+        allow create, update: if isValidId(churchId) && isValidId(deptId)
+          && isValidDepartment(incoming())
+          && incoming().churchId == churchId
+          && isChurchStaffEditor(churchId);
+
+        allow delete: if isValidId(churchId) && isValidId(deptId) && (
+          isChurchSecretary(churchId)
+          || isPlatformRootAdmin()
+        );
+      }
+
+      // -----------------------------------------------------------------------
+      // AGENDA EVENTS SUB-COLLECTION (All church users read; Secretary writes)
+      // -----------------------------------------------------------------------
+      match /events/{eventId} {
+        allow get: if isValidId(churchId) && isValidId(eventId) && (
+          isSameChurch(churchId)
+          || isPlatformRootAdmin()
+        );
+
+        allow list: if isValidId(churchId) && (
+          isSameChurch(churchId)
+          || isPlatformRootAdmin()
+        );
+
+        allow create, update: if isValidId(churchId) && isValidId(eventId)
+          && isValidEvent(incoming())
+          && incoming().churchId == churchId
+          && isChurchSecretary(churchId);
+
+        allow delete: if isValidId(churchId) && isValidId(eventId) && (
+          isChurchSecretary(churchId)
+          || isPlatformRootAdmin()
+        );
+      }
+    }
+
+    // =========================================================================
+    // USERS COLLECTION (Strict Anti-Privilege-Escalation & Anti-Cross-Tenant)
+    // =========================================================================
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (
+        (isSignedIn() && request.auth.uid == userId)
+        || (isActiveUser() && existing().churchId == userChurchId() && isChurchSecretary(existing().churchId))
+        || isPlatformRootAdmin()
+      );
+
+      allow list: if (isSignedIn() && hasVerifiedEmailOrGoogle() && tokenMatchesEmail(resource.data.email))
+        || (isActiveUser() && resource.data.churchId == userChurchId() && resource.data.churchId != 'PLATFORM')
+        || isPlatformRootAdmin();
+
+      allow create: if isValidId(userId) && isValidUser(incoming()) && incoming().id == userId && (
+        // Bootstrap: creator of a newly registered church creating their own initial GENERAL_SECRETARY profile
+        (
+          isSignedIn()
+          && request.auth.uid == userId
+          && !exists(userDocPath())
+          && incoming().churchId != 'PLATFORM'
+          && incoming().role == 'GENERAL_SECRETARY'
+          && incoming().status == 'ACTIVE'
+          && exists(/databases/$(database)/documents/churches/$(incoming().churchId))
+          && (
+            ('ownerUid' in get(/databases/$(database)/documents/churches/$(incoming().churchId)).data
+              && get(/databases/$(database)/documents/churches/$(incoming().churchId)).data.ownerUid == request.auth.uid)
+            || ('email' in get(/databases/$(database)/documents/churches/$(incoming().churchId)).data
+              && tokenMatchesEmail(get(/databases/$(database)/documents/churches/$(incoming().churchId)).data.email))
+          )
+        )
+        // Claim: pre-authorized user (e.g. created by Platform Admin or Church Secretary for Gmail login) claiming UID doc
+        || (
+          isSignedIn()
+          && request.auth.uid == userId
+          && !exists(userDocPath())
+          && hasVerifiedEmailOrGoogle()
+          && 'claimedFromUserId' in incoming()
+          && isValidId(incoming().claimedFromUserId)
+          && exists(/databases/$(database)/documents/users/$(incoming().claimedFromUserId))
+          && tokenMatchesEmail(get(/databases/$(database)/documents/users/$(incoming().claimedFromUserId)).data.email)
+          && get(/databases/$(database)/documents/users/$(incoming().claimedFromUserId)).data.status in ['ACTIVE', 'PENDING_INVITE']
+          && tokenMatchesEmail(incoming().email)
+          && incoming().churchId == get(/databases/$(database)/documents/users/$(incoming().claimedFromUserId)).data.churchId
+          && incoming().role == get(/databases/$(database)/documents/users/$(incoming().claimedFromUserId)).data.role
+          && incoming().status == 'ACTIVE'
+          && (!('departmentIds' in get(/databases/$(database)/documents/users/$(incoming().claimedFromUserId)).data)
+              || (('departmentIds' in incoming()) && incoming().departmentIds == get(/databases/$(database)/documents/users/$(incoming().claimedFromUserId)).data.departmentIds))
+          && (!('platformPermissions' in get(/databases/$(database)/documents/users/$(incoming().claimedFromUserId)).data)
+              || (('platformPermissions' in incoming()) && incoming().platformPermissions == get(/databases/$(database)/documents/users/$(incoming().claimedFromUserId)).data.platformPermissions))
+        )
+        || (
+          isChurchSecretary(incoming().churchId)
+          && incoming().churchId != 'PLATFORM'
+          && incoming().role != 'PLATFORM_ADMIN'
+          && incoming().role != 'PLATFORM_ASSISTANT_ADMIN'
+        )
+        || isPlatformRootAdmin()
+      );
+
+      allow update: if isValidId(userId) && isValidUser(incoming()) && incoming().id == existing().id && (
+        // Self-update: strictly limited to non-RBAC fields (name, lastLogin, notificationPreferences)
+        (
+          isSignedIn() && request.auth.uid == userId
+          && incoming().churchId == existing().churchId
+          && incoming().role == existing().role
+          && incoming().status == existing().status
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'lastLogin', 'notificationPreferences'])
+        )
+        // Church Secretary modifying another user within the SAME church (cannot assign platform roles)
+        || (
+          isChurchSecretary(existing().churchId)
+          && request.auth.uid != userId
+          && incoming().churchId == existing().churchId
+          && incoming().churchId != 'PLATFORM'
+          && incoming().role != 'PLATFORM_ADMIN'
+          && incoming().role != 'PLATFORM_ASSISTANT_ADMIN'
+        )
+        // Platform Root Admin (e.g. flaviamara0308@gmail.com) authorizing/managing platform or church users
+        || (
+          isPlatformRootAdmin()
+          && request.auth.uid != userId
+        )
+        // Bootstrapped Platform Root Admin keeping own profile synced on login
+        || (
+          isBootstrappedPlatformAdmin()
+          && request.auth.uid == userId
+          && incoming().churchId == 'PLATFORM'
+          && incoming().role == 'PLATFORM_ADMIN'
+          && incoming().status == 'ACTIVE'
+        )
+      );
+
+      allow delete: if isValidId(userId) && request.auth.uid != userId && (
+        isChurchSecretary(existing().churchId)
+        || isPlatformRootAdmin()
+        || (
+          isSignedIn()
+          && hasUserDoc()
+          && hasVerifiedEmailOrGoogle()
+          && tokenMatchesEmail(existing().email)
+          && existing().churchId == userData().churchId
+          && existing().role == userData().role
+        )
+      );
+    }
+
+    // =========================================================================
+    // AUDIT LOGS (Strictly Immutable & Tenant-Isolated)
+    // =========================================================================
+    match /auditLogs/{auditId} {
+      allow get: if isValidId(auditId) && (
+        (isPlatformStaff() && resource.data.churchId == 'PLATFORM')
+        || isChurchSecretary(resource.data.churchId)
+      );
+
+      allow list: if (isPlatformStaff() && resource.data.churchId == 'PLATFORM')
+        || isChurchSecretary(resource.data.churchId);
+
+      allow create: if isValidId(auditId) && isValidAuditLog(incoming())
+        && incoming().id == auditId
+        && incoming().userId == request.auth.uid
+        && (
+          isPlatformStaff()
+          || (isActiveUser() && incoming().churchId == userChurchId())
+        );
+
+      allow update, delete: if false;
+    }
+
+    // =========================================================================
+    // BACKUPS (Only canManageSettingsAndBackups within same churchId)
+    // =========================================================================
+    match /backups/{backupId} {
+      allow get: if isValidId(backupId) && canManageSettingsAndBackups(resource.data.churchId);
+      allow list: if canManageSettingsAndBackups(resource.data.churchId);
+      allow create: if isValidId(backupId)
+        && isValidBackup(incoming())
+        && incoming().id == backupId
+        && canManageSettingsAndBackups(incoming().churchId);
+      allow update: if isValidId(backupId)
+        && isValidBackup(incoming())
+        && incoming().id == existing().id
+        && incoming().churchId == existing().churchId
+        && canManageSettingsAndBackups(existing().churchId);
+      allow delete: if isValidId(backupId) && canManageSettingsAndBackups(existing().churchId);
+    }
+
+    // =========================================================================
+    // PAYMENT PROOFS (Manual Billing Review)
+    // =========================================================================
+    match /paymentProofs/{proofId} {
+      allow get: if isValidId(proofId) && (
+        hasPlatformPermission('MANAGE_FINANCES')
+        || isSameChurch(resource.data.churchId)
+      );
+
+      allow list: if hasPlatformPermission('MANAGE_FINANCES')
+        || isSameChurch(resource.data.churchId);
+
+      // Church Secretary submits proof ONLY with status == 'PENDING' (no auto-activation!)
+      allow create: if isValidId(proofId) && isValidPaymentProof(incoming())
+        && incoming().id == proofId
+        && isChurchSecretary(incoming().churchId)
+        && incoming().status == 'PENDING';
+
+      // Only Platform Finance Admin can approve or reject; rejection requires rejectionReason
+      allow update: if isValidId(proofId) && isValidPaymentProof(incoming())
+        && incoming().id == existing().id
+        && incoming().churchId == existing().churchId
+        && incoming().plan == existing().plan
+        && hasPlatformPermission('MANAGE_FINANCES')
+        && (
+          incoming().status == 'APPROVED'
+          || (incoming().status == 'REJECTED' && 'rejectionReason' in incoming() && isStrLen(incoming().rejectionReason, 3, 500))
+        );
+
+      allow delete: if isValidId(proofId) && isPlatformRootAdmin();
+    }
+
+    // =========================================================================
+    // SUPPORT TICKETS (General Secretary opens; Platform Support answers)
+    // =========================================================================
+    match /tickets/{ticketId} {
+      allow get: if isValidId(ticketId) && (
+        hasPlatformPermission('SUPPORT')
+        || isChurchSecretary(resource.data.churchId)
+      );
+
+      allow list: if hasPlatformPermission('SUPPORT')
+        || isChurchSecretary(resource.data.churchId);
+
+      allow create: if isValidId(ticketId) && isValidTicket(incoming())
+        && incoming().id == ticketId
+        && isChurchSecretary(incoming().churchId)
+        && incoming().status == 'OPEN';
+
+      allow update: if isValidId(ticketId) && isValidTicket(incoming())
+        && incoming().id == existing().id
+        && incoming().churchId == existing().churchId
+        && (
+          hasPlatformPermission('SUPPORT')
+          || isChurchSecretary(existing().churchId)
+        );
+
+      allow delete: if isValidId(ticketId) && isPlatformRootAdmin();
+    }
+
+    // =========================================================================
+    // PLATFORM PAYMENT SETTINGS (Pix / Bank Info)
+    // =========================================================================
+    match /platformSettings/{settingId} {
+      allow get: if isValidId(settingId) && (isActiveUser() || isBootstrappedPlatformAdmin());
+      allow list: if isPlatformStaff();
+      allow create, update: if isValidId(settingId) && hasPlatformPermission('PLATFORM_SETTINGS');
+      allow delete: if false;
+    }
+  }
+}

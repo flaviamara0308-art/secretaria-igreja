@@ -1,0 +1,39 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Safety baseline: deny all unauthenticated access
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isMaxBytes(megaBytes) {
+      return request.resource.size <= megaBytes * 1024 * 1024;
+    }
+
+    // Church Logos & Branding Assets (Images up to 5MB)
+    match /churches/{churchId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isImage() && isMaxBytes(5);
+    }
+
+    // Member Photographs (Strictly authenticated access, max 5MB)
+    match /churches/{churchId}/members/{photoId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isImage() && isMaxBytes(5);
+    }
+
+    // Church Backups & Documents (Max 25MB)
+    match /churches/{churchId}/backups/{backupFile} {
+      allow read, write: if isSignedIn() && isMaxBytes(25);
+    }
+  }
+}

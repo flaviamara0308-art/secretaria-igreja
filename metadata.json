@@ -1,0 +1,6 @@
+{
+  "name": "SECRETARIA DA IGREJA",
+  "description": "Sistema profissional de administração de membros de igrejas, multiigrejas, offline-first e PWA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

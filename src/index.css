@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+:root {
+  --church-primary: #1e3a8a;
+  --church-primary-hover: #172554;
+  --church-secondary: #3b82f6;
+  --church-soft-bg: #eff6ff;
+  --church-soft-border: #bfdbfe;
+  --church-primary-rgb: 30, 58, 138;
+  --church-secondary-rgb: 59, 130, 246;
+}
+
+.church-btn-primary {
+  background-color: var(--church-primary);
+  color: #ffffff;
+  box-shadow: 0 8px 20px -6px rgba(var(--church-primary-rgb), 0.45);
+}
+
+.church-btn-primary:hover {
+  background-color: var(--church-primary-hover);
+}
+
+.church-gradient-bg {
+  background: linear-gradient(135deg, var(--church-primary) 0%, var(--church-secondary) 100%);
+  color: #ffffff;
+  box-shadow: 0 10px 24px -8px rgba(var(--church-primary-rgb), 0.5);
+}
+
+.church-soft-badge {
+  background-color: rgba(var(--church-primary-rgb), 0.1);
+  color: var(--church-primary);
+  border-color: rgba(var(--church-primary-rgb), 0.25);
+}
+
+.dark .church-soft-badge {
+  background-color: rgba(var(--church-secondary-rgb), 0.18);
+  color: #e2e8f0;
+  border-color: rgba(var(--church-secondary-rgb), 0.35);
+}
+
+.church-accent-text {
+  color: var(--church-primary);
+}
+
+.dark .church-accent-text {
+  color: var(--church-secondary);
+}
